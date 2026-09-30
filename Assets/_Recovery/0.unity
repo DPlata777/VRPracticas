@@ -12082,7 +12082,7 @@ MonoBehaviour:
   _hand: {fileID: 1477181426}
   _jointsRadiusFeature: {fileID: 477174615}
   _asTriggers: 0
-  _useLayer: 0
+  _useLayer: 4
   _mask: 67108863
 --- !u!114 &477174621
 MonoBehaviour:
@@ -12100,7 +12100,7 @@ MonoBehaviour:
   _hand: {fileID: 1477181422}
   _jointsRadiusFeature: {fileID: 477174614}
   _asTriggers: 0
-  _useLayer: 0
+  _useLayer: 4
   _mask: 67108863
 --- !u!1 &485849819
 GameObject:
