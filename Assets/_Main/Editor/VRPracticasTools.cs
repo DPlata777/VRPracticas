@@ -23,7 +23,6 @@ namespace VRPracticas.EditorTools
         const string MainScenesDir = "Assets/_Main/Scenes";
         const string MainScenePath = MainScenesDir + "/EscenaPrincipal.unity";
         const string MainSceneDataDir = MainScenesDir + "/EscenaPrincipal";
-        const string BackupDir = MainScenesDir + "/Respaldo";
         const string RecoveredScenePath = "Assets/_Recovery/0.unity";
         const string OldScenePath = "Assets/_Main/DecorativeScene 1.unity";
         // NavMesh horneado: lo usan tanto la escena principal como la vieja (referencia por GUID, sobrevive al moverlo).
@@ -191,6 +190,154 @@ namespace VRPracticas.EditorTools
             return collider;
         }
 
+        // ------------------------------------------------------------------ Cajón
+
+        const string CabinetName = "Cabinet";
+        const string DrawerName = "C Drawer 1";
+
+        /// <summary>
+        /// Igual que el muñeco de nieve (Building Block "Physic - Touch": Rigidbody con gravedad + Grabbable +
+        /// TouchHandGrabInteractable), pero el cajón solo se desliza hacia afuera: un OneGrabTranslateTransformer
+        /// limita el movimiento mientras se agarra y las restricciones del Rigidbody lo mantienen en su riel al soltarlo.
+        /// </summary>
+        [MenuItem("VR Practicas/3. Cajón que se abre (Physic - Touch)", priority = 2)]
+        static void SetupDrawer()
+        {
+            var scene = SceneManager.GetActiveScene();
+            // Si hay otro cajón del mueble seleccionado se usa ese; si no, el de arriba.
+            var selected = Selection.activeGameObject ? Selection.activeGameObject.transform : null;
+            var drawer = selected && selected.gameObject.scene.IsValid() && IsInCabinet(selected)
+                ? selected
+                : AllInScene<Transform>(scene).FirstOrDefault(t => t.name == DrawerName && IsInCabinet(t));
+            if (!drawer)
+            {
+                EditorUtility.DisplayDialog("VR Practicas",
+                    $"No encontré el cajón \"{DrawerName}\" dentro de \"{CabinetName}\".\n\n" +
+                    "Selecciona en la Jerarquía el cajón que quieres que se abra y vuelve a usar este menú.", "OK");
+                return;
+            }
+
+            if (!TryGetPullAxis(drawer, out int axis, out float sign, out float depth))
+            {
+                EditorUtility.DisplayDialog("VR Practicas",
+                    $"No pude calcular hacia dónde abre {drawer.name} (le falta el MeshFilter a él o al mueble).", "OK");
+                return;
+            }
+
+            Undo.IncrementCurrentGroup();
+            int group = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Cajón que se abre");
+
+            if (!Configure(drawer.gameObject, touch: true))
+            {
+                Undo.CollapseUndoOperations(group);
+                return;
+            }
+
+            var grabbable = drawer.GetComponent<Oculus.Interaction.Grabbable>();
+            var rigidbody = drawer.GetComponent<Rigidbody>();
+
+            // Solo se mueve sobre el eje del riel, desde cerrado hasta el 70 % de su profundidad.
+            float travel = depth * 0.7f;
+            var translate = Undo.AddComponent<Oculus.Interaction.OneGrabTranslateTransformer>(drawer.gameObject);
+            var serialized = new SerializedObject(translate);
+            serialized.FindProperty("_constraints.ConstraintsAreRelative").boolValue = true;
+            string[] axes = { "X", "Y", "Z" };
+            for (int i = 0; i < 3; i++)
+            {
+                float min = 0f, max = 0f;
+                if (i == axis)
+                {
+                    min = sign > 0 ? 0f : -travel;
+                    max = sign > 0 ? travel : 0f;
+                }
+                SetConstraint(serialized, "Min" + axes[i], min);
+                SetConstraint(serialized, "Max" + axes[i], max);
+            }
+            serialized.ApplyModifiedProperties();
+            SetRef(grabbable, "_oneGrabTransformer", translate);
+
+            // Si se "lanzara" al soltarlo, saldría disparado por el riel.
+            var grabbableSerialized = new SerializedObject(grabbable);
+            grabbableSerialized.FindProperty("_throwWhenUnselected").boolValue = false;
+            grabbableSerialized.ApplyModifiedProperties();
+
+            // Las restricciones del Rigidbody son en ejes del mundo: sirven si el mueble está alineado con ellos.
+            Vector3 railWorld = drawer.parent.TransformDirection(AxisVector(axis)).normalized;
+            int worldAxis = Enumerable.Range(0, 3).OrderByDescending(i => Mathf.Abs(railWorld[i])).First();
+            Undo.RecordObject(rigidbody, "Riel del cajón");
+            if (Mathf.Abs(railWorld[worldAxis]) > 0.99f)
+            {
+                var freeze = RigidbodyConstraints.FreezeRotation | RigidbodyConstraints.FreezePosition;
+                freeze &= ~(RigidbodyConstraints)(1 << (worldAxis + 1)); // FreezePositionX = 2, Y = 4, Z = 8
+                rigidbody.constraints = freeze;
+            }
+            else
+            {
+                // Mueble girado en diagonal: se deja cinemático para que no se caiga al soltarlo.
+                rigidbody.isKinematic = true;
+                rigidbody.useGravity = false;
+            }
+
+            Undo.CollapseUndoOperations(group);
+            EditorSceneManager.MarkSceneDirty(drawer.gameObject.scene);
+            Selection.activeGameObject = drawer.gameObject;
+            EditorGUIUtility.PingObject(drawer.gameObject);
+
+            EditorUtility.DisplayDialog("VR Practicas",
+                $"{drawer.name} ya se puede abrir con la mano (Touch Hand Grab, igual que el muñeco de nieve).\n" +
+                $"Abre {travel:0.00} m hacia {(sign > 0 ? "+" : "-")}{axes[axis]} del mueble.\n\n" +
+                "Guarda la escena (Ctrl+S) y pruébalo en Play. Ctrl+Z deshace todo de una vez.", "OK");
+        }
+
+        /// <summary>
+        /// El frente del cajón queda al ras del mueble y el fondo queda adentro: el eje horizontal donde los
+        /// huecos a cada lado son más distintos es el riel, y el lado con menos hueco es hacia donde abre.
+        /// </summary>
+        static bool TryGetPullAxis(Transform drawer, out int axis, out float sign, out float depth)
+        {
+            axis = 2; sign = 1f; depth = 0f;
+            var drawerMesh = drawer.GetComponent<MeshFilter>();
+            var cabinetMesh = drawer.parent.GetComponent<MeshFilter>();
+            if (!drawerMesh || !drawerMesh.sharedMesh || !cabinetMesh || !cabinetMesh.sharedMesh)
+                return false;
+
+            Bounds cabinet = cabinetMesh.sharedMesh.bounds;
+            Bounds local = drawerMesh.sharedMesh.bounds;
+            var inCabinet = new Bounds(drawer.parent.InverseTransformPoint(drawer.TransformPoint(local.center)), Vector3.zero);
+            for (int i = 0; i < 8; i++)
+            {
+                var corner = local.center + Vector3.Scale(local.extents,
+                    new Vector3((i & 1) == 0 ? -1 : 1, (i & 2) == 0 ? -1 : 1, (i & 4) == 0 ? -1 : 1));
+                inCabinet.Encapsulate(drawer.parent.InverseTransformPoint(drawer.TransformPoint(corner)));
+            }
+
+            float best = -1f;
+            foreach (int i in new[] { 0, 2 })
+            {
+                float gapPositive = cabinet.max[i] - inCabinet.max[i];
+                float gapNegative = inCabinet.min[i] - cabinet.min[i];
+                float asymmetry = Mathf.Abs(gapPositive - gapNegative);
+                if (asymmetry <= best)
+                    continue;
+                best = asymmetry;
+                axis = i;
+                sign = gapPositive < gapNegative ? 1f : -1f;
+                depth = inCabinet.size[i];
+            }
+            return depth > 0f;
+        }
+
+        static bool IsInCabinet(Transform t) => t.parent && t.parent.name.Trim() == CabinetName;
+
+        static Vector3 AxisVector(int axis) => axis == 0 ? Vector3.right : axis == 1 ? Vector3.up : Vector3.forward;
+
+        static void SetConstraint(SerializedObject serialized, string name, float value)
+        {
+            serialized.FindProperty($"_constraints.{name}.Constrain").boolValue = true;
+            serialized.FindProperty($"_constraints.{name}.Value").floatValue = value;
+        }
+
         // ------------------------------------------------------------------ Organización
 
         [MenuItem("VR Practicas/2. Organizar escenas y carpetas", priority = 1)]
@@ -199,16 +346,17 @@ namespace VRPracticas.EditorTools
             var steps = new StringBuilder();
             bool moveMain = Exists(RecoveredScenePath) && !Exists(MainScenePath);
             bool moveData = Exists(OldSceneDataDir) && !Exists(MainSceneDataDir);
-            bool moveOld = Exists(OldScenePath);
+            bool removeOld = Exists(OldScenePath);
             bool removeEmpty = Exists(EmptyScenePath);
             bool removeTutorial = Exists("Assets/TutorialInfo") || Exists("Assets/Readme.asset");
 
             if (moveMain) steps.AppendLine($"• Mover la escena de trabajo:\n   {RecoveredScenePath}\n   → {MainScenePath}");
             if (moveData) steps.AppendLine($"• Mover el NavMesh horneado a {MainSceneDataDir}/");
-            if (moveOld) steps.AppendLine($"• Mover la versión anterior (DecorativeScene 1) a {BackupDir}/");
-            if (removeEmpty) steps.AppendLine($"• Mandar a la papelera la escena vacía {EmptyScenePath}");
-            if (removeTutorial) steps.AppendLine("• Mandar a la papelera el tutorial de la plantilla URP (TutorialInfo, Readme)");
+            if (removeOld) steps.AppendLine($"• Eliminar la versión anterior {OldScenePath}");
+            if (removeEmpty) steps.AppendLine($"• Eliminar la escena vacía {EmptyScenePath}");
+            if (removeTutorial) steps.AppendLine("• Eliminar el tutorial de la plantilla URP (TutorialInfo, Readme)");
             steps.AppendLine("• Dejar solo EscenaPrincipal en Build Settings");
+            steps.AppendLine("\n(Lo eliminado va a la papelera de Windows y sigue en el historial de Git.)");
 
             if (!EditorUtility.DisplayDialog("Organizar proyecto",
                     steps + "\nAntes se guardan las escenas abiertas (con tus cambios actuales).", "Organizar", "Cancelar"))
@@ -223,11 +371,7 @@ namespace VRPracticas.EditorTools
             EnsureFolder(MainScenesDir);
             if (moveMain) Move(RecoveredScenePath, MainScenePath);
             if (moveData) Move(OldSceneDataDir, MainSceneDataDir);
-            if (moveOld)
-            {
-                EnsureFolder(BackupDir);
-                Move(OldScenePath, BackupDir + "/DecorativeScene 1.unity");
-            }
+            if (removeOld) Trash(OldScenePath);
             if (removeEmpty) Trash(EmptyScenePath);
             Trash("Assets/TutorialInfo");
             Trash("Assets/Readme.asset");
