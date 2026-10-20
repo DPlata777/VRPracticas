@@ -144,7 +144,7 @@ namespace PW
 
         static void AssignScreenShotsToOrders(SerializedObject serializedObject, SerializedProperty property, int totalSize, string ScreenShotPath)
         {
-            var orderGen = FindObjectOfType<OrderGenerator>();
+            var orderGen = FindFirstObjectByType<OrderGenerator>();
             if (orderGen == null)
             {
                 Debug.LogError("There is no OrderGenerator in the scnee. To assign screenshots to orders, you need to add OrderGenerator component to a gameObject in the scene.");

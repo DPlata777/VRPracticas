@@ -46,7 +46,7 @@ namespace PW
             //If you didn't set a microwave yourself,
             //We'll try to get one from the scene when available
             if (m_Machine == null)
-                m_Machine = FindObjectOfType<Microwave>();
+                m_Machine = FindFirstObjectByType<Microwave>();
         }
 
         void OnMouseDown()

@@ -77,7 +77,7 @@ namespace PW
 
         public virtual bool CanGoPlayerSlot()
         {
-            var PlayerSlots = FindObjectOfType<PlayerSlots>();
+            var PlayerSlots = FindFirstObjectByType<PlayerSlots>();
             if (PlayerSlots.CanHoldItem(orderID))
             {
                 BasicGameEvents.RaiseOnProductAddedToSlot(orderID);

@@ -38,7 +38,7 @@ namespace PW
             //If you didn't set a Cookingobject yourself,
             //We'll try to get one from the scene when available
             if (cookingObject == null)
-                cookingObject = FindObjectOfType<CookingGameObject>();
+                cookingObject = FindFirstObjectByType<CookingGameObject>();
         }
 
         private void OnEnable()
